@@ -5,12 +5,14 @@ metadata:
 type: Opaque
 stringData:
   DEEPWORK_SECRET_KEY: replace-me-with-a-long-random-secret
+  DEEPWORK_POSTGRES_PASSWORD: ""
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: deepwork-config
 data:
+  DEEPWORK_DB_BACKEND: sqlite
   HOST: "0.0.0.0"
   PORT: "8000"
   DEEPWORK_DB_PATH: /data/deepwork.db
@@ -19,6 +21,12 @@ data:
   DEEPWORK_SHORT_BREAK_MINUTES: "5"
   DEEPWORK_LONG_BREAK_MINUTES: "15"
   DEEPWORK_LONG_BREAK_INTERVAL: "4"
+  DEEPWORK_POSTGRES_HOST: ""
+  DEEPWORK_POSTGRES_PORT: "5432"
+  DEEPWORK_POSTGRES_DATABASE: ""
+  DEEPWORK_POSTGRES_USER: ""
+  DEEPWORK_POSTGRES_MAINTENANCE_DATABASE: postgres
+  DEEPWORK_POSTGRES_SSLMODE: prefer
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

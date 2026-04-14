@@ -4,9 +4,17 @@ services:
     ports:
       - "8000:8000"
     environment:
+      DEEPWORK_DB_BACKEND: sqlite
       DEEPWORK_DB_PATH: /data/deepwork.db
       DEEPWORK_SECRET_KEY: change-me-in-compose
       DEEPWORK_WEEK_START: monday
+      DEEPWORK_POSTGRES_HOST: ""
+      DEEPWORK_POSTGRES_PORT: 5432
+      DEEPWORK_POSTGRES_DATABASE: ""
+      DEEPWORK_POSTGRES_USER: ""
+      DEEPWORK_POSTGRES_PASSWORD: ""
+      DEEPWORK_POSTGRES_MAINTENANCE_DATABASE: postgres
+      DEEPWORK_POSTGRES_SSLMODE: prefer
     volumes:
       - deepwork_data:/data
 

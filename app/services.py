@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -33,10 +32,10 @@ class DeepWorkService:
         self.config = config
 
     def init_db(self):
-        init_db(self.config.database_path)
+        init_db(self.config)
 
     def _connect(self):
-        return connect(self.config.database_path)
+        return connect(self.config)
 
     def _week_bounds(self, current_day: date):
         start_weekday = DATE_TO_WEEKDAY.get(self.config.week_starts_on, 0)
@@ -69,17 +68,13 @@ class DeepWorkService:
 
         now = to_iso_timestamp(utc_now())
         with self._connect() as connection:
-            cursor = connection.execute(
+            row = connection.execute(
                 """
                 INSERT INTO users (email, password_hash, is_admin, created_at)
                 VALUES (?, ?, 1, ?)
+                RETURNING id, email, is_admin, created_at
                 """,
                 (email.strip().lower(), hash_password(password), now),
-            )
-            user_id = cursor.lastrowid
-            row = connection.execute(
-                "SELECT id, email, is_admin, created_at FROM users WHERE id = ?",
-                (user_id,),
             ).fetchone()
         return self._serialize_row(row)
 
@@ -90,17 +85,13 @@ class DeepWorkService:
 
         now = to_iso_timestamp(utc_now())
         with self._connect() as connection:
-            cursor = connection.execute(
+            row = connection.execute(
                 """
                 INSERT INTO users (email, password_hash, is_admin, created_at)
                 VALUES (?, ?, ?, ?)
+                RETURNING id, email, is_admin, created_at
                 """,
-                (email.strip().lower(), hash_password(password), int(is_admin), now),
-            )
-            user_id = cursor.lastrowid
-            row = connection.execute(
-                "SELECT id, email, is_admin, created_at FROM users WHERE id = ?",
-                (user_id,),
+                (email.strip().lower(), hash_password(password), bool(is_admin), now),
             ).fetchone()
         return self._serialize_row(row)
 
@@ -129,15 +120,14 @@ class DeepWorkService:
     def create_goal(self, user_id: int, title: str, description: str):
         now = to_iso_timestamp(utc_now())
         with self._connect() as connection:
-            cursor = connection.execute(
+            row = connection.execute(
                 """
                 INSERT INTO goals (user_id, title, description, status, created_at)
                 VALUES (?, ?, ?, 'active', ?)
+                RETURNING *
                 """,
                 (user_id, title.strip(), description.strip(), now),
-            )
-            goal_id = cursor.lastrowid
-            row = connection.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            ).fetchone()
         return self._serialize_row(row)
 
     def list_goals(self, user_id: int, status: Optional[str] = None):
@@ -259,17 +249,13 @@ class DeepWorkService:
                 return self._serialize_row(row)
 
             now = to_iso_timestamp(utc_now())
-            cursor = connection.execute(
+            row = connection.execute(
                 """
                 INSERT INTO weekly_reviews (user_id, week_start, week_end, status, created_at)
                 VALUES (?, ?, ?, 'open', ?)
+                RETURNING *
                 """,
                 (user_id, week_start.isoformat(), week_end.isoformat(), now),
-            )
-            review_id = cursor.lastrowid
-            row = connection.execute(
-                "SELECT * FROM weekly_reviews WHERE id = ?",
-                (review_id,),
             ).fetchone()
         return self._serialize_row(row)
 
@@ -388,19 +374,15 @@ class DeepWorkService:
         timestamp = started_at or utc_now()
         now = to_iso_timestamp(timestamp)
         with self._connect() as connection:
-            cursor = connection.execute(
+            row = connection.execute(
                 """
                 INSERT INTO focus_sessions (
                     user_id, goal_id, state, planned_minutes, started_at, last_state_change_at
                 )
                 VALUES (?, ?, 'running', ?, ?, ?)
+                RETURNING *
                 """,
                 (user_id, goal_id, planned_minutes, now, now),
-            )
-            session_id = cursor.lastrowid
-            row = connection.execute(
-                "SELECT * FROM focus_sessions WHERE id = ?",
-                (session_id,),
             ).fetchone()
         return self._serialize_row(row)
 

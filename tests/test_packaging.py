@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class PackagingTests(unittest.TestCase):
+    def test_requirements_include_postgres_driver(self):
+        requirements = (ROOT / "requirements.txt").read_text()
+
+        self.assertIn("psycopg", requirements)
+
     def test_dockerfile_does_not_embed_secret_key_env(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
 
