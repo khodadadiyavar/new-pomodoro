@@ -1,0 +1,14 @@
+services:
+  deepwork:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DEEPWORK_DB_PATH: /data/deepwork.db
+      DEEPWORK_SECRET_KEY: change-me-in-compose
+      DEEPWORK_WEEK_START: monday
+    volumes:
+      - deepwork_data:/data
+
+volumes:
+  deepwork_data:
