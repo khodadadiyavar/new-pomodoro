@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -49,6 +50,14 @@ class DeepWorkService:
             return None
         return {key: row[key] for key in row.keys()}
 
+    def _normalize_credentials(self, email: str, password: str):
+        normalized_email = email.strip().lower()
+        if not normalized_email:
+            raise ValueError("Email is required.")
+        if not password.strip():
+            raise ValueError("Password is required.")
+        return normalized_email, password
+
     def count_users(self) -> int:
         with self._connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS count FROM users").fetchone()
@@ -65,6 +74,7 @@ class DeepWorkService:
     def bootstrap_admin(self, email: str, password: str):
         if self.count_users() > 0:
             raise ValueError("Bootstrap is only available before the first user exists.")
+        normalized_email, password = self._normalize_credentials(email, password)
 
         now = to_iso_timestamp(utc_now())
         with self._connect() as connection:
@@ -74,7 +84,7 @@ class DeepWorkService:
                 VALUES (?, ?, 1, ?)
                 RETURNING id, email, is_admin, created_at
                 """,
-                (email.strip().lower(), hash_password(password), now),
+                (normalized_email, hash_password(password), now),
             ).fetchone()
         return self._serialize_row(row)
 
@@ -82,17 +92,21 @@ class DeepWorkService:
         actor = self.get_user_by_id(actor_user_id)
         if not actor or not actor["is_admin"]:
             raise PermissionError("Only admins can create users.")
+        normalized_email, password = self._normalize_credentials(email, password)
 
         now = to_iso_timestamp(utc_now())
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                INSERT INTO users (email, password_hash, is_admin, created_at)
-                VALUES (?, ?, ?, ?)
-                RETURNING id, email, is_admin, created_at
-                """,
-                (email.strip().lower(), hash_password(password), bool(is_admin), now),
-            ).fetchone()
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    INSERT INTO users (email, password_hash, is_admin, created_at)
+                    VALUES (?, ?, ?, ?)
+                    RETURNING id, email, is_admin, created_at
+                    """,
+                    (normalized_email, hash_password(password), bool(is_admin), now),
+                ).fetchone()
+        except sqlite3.IntegrityError as error:
+            raise ValueError("A user with that email already exists.") from error
         return self._serialize_row(row)
 
     def list_users(self):
@@ -347,7 +361,7 @@ class DeepWorkService:
             raise ValueError("Goal not found.")
         return goal
 
-    def get_active_session(self, user_id: int):
+    def _load_active_session(self, user_id: int):
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -359,6 +373,52 @@ class DeepWorkService:
                 (user_id,),
             ).fetchone()
         return self._serialize_row(row)
+
+    def reconcile_active_session(self, user_id: int, now: Optional[datetime] = None):
+        session = self._load_active_session(user_id)
+        if not session:
+            return None
+        if session["state"] != "running":
+            return session
+
+        current = now or utc_now()
+        planned_seconds = int(session["planned_minutes"]) * 60
+        elapsed_seconds = self._elapsed_seconds_for_session(session, at_time=current)
+        if elapsed_seconds < planned_seconds:
+            return session
+
+        already_elapsed = int(session["elapsed_seconds"])
+        remaining_seconds = max(0, planned_seconds - already_elapsed)
+        completion_time = datetime.fromisoformat(session["last_state_change_at"]) + timedelta(
+            seconds=remaining_seconds
+        )
+        capped_ended_at = to_iso_timestamp(completion_time)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE focus_sessions
+                SET state = 'completed',
+                    actual_minutes = ?,
+                    elapsed_seconds = ?,
+                    ended_at = ?,
+                    last_state_change_at = ?,
+                    note = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    max(1, round(planned_seconds / 60)),
+                    planned_seconds,
+                    capped_ended_at,
+                    capped_ended_at,
+                    session["note"],
+                    session["id"],
+                    user_id,
+                ),
+            )
+        return None
+
+    def get_active_session(self, user_id: int, now: Optional[datetime] = None):
+        return self.reconcile_active_session(user_id, now=now)
 
     def start_session(
         self,
@@ -477,6 +537,40 @@ class DeepWorkService:
                 ),
             )
         return self._load_session(user_id, session_id)
+
+    def stop_session(
+        self,
+        user_id: int,
+        session_id: int,
+        ended_at: Optional[datetime] = None,
+        note: str = "",
+    ):
+        return self.complete_session(
+            user_id,
+            session_id,
+            ended_at=ended_at,
+            note=note,
+        )
+
+    def discard_session(self, user_id: int, session_id: int):
+        session = self._load_session(user_id, session_id)
+        if not session or session["state"] not in {"running", "paused"}:
+            raise ValueError("Session is not active.")
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM focus_sessions
+                WHERE id = ? AND user_id = ?
+                """,
+                (session_id, user_id),
+            )
+
+        discarded = dict(session)
+        discarded["state"] = "discarded"
+        discarded["actual_minutes"] = 0
+        discarded["ended_at"] = to_iso_timestamp(utc_now())
+        return discarded
 
     def abandon_session(self, user_id: int, session_id: int):
         session = self._load_session(user_id, session_id)

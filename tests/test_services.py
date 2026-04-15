@@ -85,6 +85,72 @@ class DeepWorkServiceTests(unittest.TestCase):
         self.assertEqual(scoreboard["total_actual_minutes"], 0)
         self.assertEqual(scoreboard["goals"][0]["actual_minutes"], 0)
 
+    def test_stop_session_records_duration_in_goal_history(self):
+        user = self.service.bootstrap_admin("admin@example.com", "password")
+        goal = self.service.create_goal(user["id"], "Ship v1", "Deliver it")
+        session = self.service.start_session(
+            user["id"],
+            goal["id"],
+            planned_minutes=25,
+            started_at=datetime(2026, 4, 15, 9, 0, 0),
+        )
+
+        stopped = self.service.stop_session(
+            user["id"],
+            session["id"],
+            ended_at=datetime(2026, 4, 15, 9, 18, 0),
+            note="Stopped early after a good pass",
+        )
+        detail = self.service.get_goal_detail(user["id"], goal["id"])
+
+        self.assertEqual(stopped["state"], "completed")
+        self.assertEqual(detail["sessions"][0]["id"], session["id"])
+        self.assertEqual(detail["sessions"][0]["actual_minutes"], 18)
+
+    def test_discarded_session_is_not_returned_in_goal_history_or_scoreboard(self):
+        user = self.service.bootstrap_admin("admin@example.com", "password")
+        goal = self.service.create_goal(user["id"], "Read deeply", "Study")
+        review = self.service.get_or_create_weekly_review(user["id"], today=date(2026, 4, 15))
+        self.service.upsert_weekly_commitment(user["id"], review["week_start"], goal["id"], 3)
+        session = self.service.start_session(
+            user["id"],
+            goal["id"],
+            planned_minutes=25,
+            started_at=datetime(2026, 4, 15, 10, 0, 0),
+        )
+
+        self.service.discard_session(user["id"], session["id"])
+        detail = self.service.get_goal_detail(user["id"], goal["id"])
+        scoreboard = self.service.get_weekly_scoreboard(user["id"], review["week_start"])
+
+        self.assertEqual(detail["sessions"], [])
+        self.assertEqual(scoreboard["goals"][0]["actual_minutes"], 0)
+
+    def test_reconcile_active_session_auto_completes_expired_running_session(self):
+        user = self.service.bootstrap_admin("admin@example.com", "password")
+        goal = self.service.create_goal(user["id"], "Ship v1", "Deliver it")
+        reconcile_time = datetime(2026, 4, 15, 8, 30, 0)
+        expected_completion_time = datetime(2026, 4, 15, 8, 25, 0)
+        session = self.service.start_session(
+            user["id"],
+            goal["id"],
+            planned_minutes=25,
+            started_at=datetime(2026, 4, 15, 8, 0, 0),
+        )
+
+        active = self.service.get_active_session(
+            user["id"],
+            now=reconcile_time,
+        )
+        detail = self.service.get_goal_detail(user["id"], goal["id"])
+
+        self.assertIsNone(active)
+        self.assertEqual(detail["sessions"][0]["id"], session["id"])
+        self.assertEqual(detail["sessions"][0]["state"], "completed")
+        self.assertEqual(detail["sessions"][0]["actual_minutes"], 25)
+        self.assertEqual(detail["sessions"][0]["elapsed_seconds"], 25 * 60)
+        self.assertEqual(detail["sessions"][0]["ended_at"], expected_completion_time.isoformat())
+
     def test_user_data_is_isolated(self):
         admin = self.service.bootstrap_admin("admin@example.com", "password")
         other = self.service.create_user(admin["id"], "other@example.com", "password")

@@ -70,6 +70,22 @@ It is a focused system built around:
 - `Weekly Review` for commitment, review, and planning
 - `History` for lightweight trend visibility
 
+## Focus Session Lifecycle
+
+Focus sessions are goal-bound and use explicit controls:
+
+- `Start` begins a goal session
+- `Pause` freezes the timer
+- `Resume` continues a paused session
+- `Stop` ends the active session and records it in goal history
+- `Discard` removes the active session without recording it
+
+Session reliability is server-backed rather than page-local:
+
+- the focus screen polls `/api/session-status` so the UI can recover accurate state
+- sessions auto-complete when their timer expires, even if the user leaves the focus page before returning
+- logged-in pages now surface live session state outside `/focus`, so running or paused work stays visible until the user jumps back into focus mode
+
 ## Architecture
 
 ```mermaid
@@ -94,6 +110,11 @@ flowchart LR
 ### Local Python
 
 ```bash
+export DEEPWORK_SECRET_KEY="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(48))
+PY
+)"
 python3 run.py
 ```
 
@@ -112,6 +133,26 @@ The default Compose setup uses:
 - a named volume for `/data`
 
 Before starting Compose, provide `DEEPWORK_SECRET_KEY` from your shell or env file.
+
+## First Admin And User Management
+
+On a fresh installation, the app redirects to `/bootstrap` and requires creation of the first admin account.
+
+Recommended first-run flow:
+
+1. open the app
+2. create the first admin account on the bootstrap screen
+3. sign in with that admin account
+4. open the `Users` page from the sidebar
+5. create additional member or admin accounts from the user-management form
+
+Admin workflow notes:
+
+- only admins can access the `Users` page
+- the `Make admin` checkbox creates another admin account
+- duplicate email addresses are rejected with an inline error
+- blank email or password submissions are rejected with inline validation errors
+- non-admin users do not get access to user management
 
 ## Database Modes
 
@@ -157,24 +198,39 @@ This assumes the configured credentials are allowed to create the target databas
 
 ## Kubernetes
 
-A single-file Kubernetes manifest is included at:
+A personal-use Kubernetes manifest is included at:
 
 ```bash
-deploy/kubernetes.yaml
+deploy/kubernetes-personal.yaml
 ```
 
 Apply it with:
 
 ```bash
-kubectl apply -f deploy/kubernetes.yaml
+kubectl apply -f deploy/kubernetes-personal.yaml
 ```
 
-Before using it in a real cluster:
+The personal manifest is intended to be the easy mode:
 
-1. replace the placeholder `DEEPWORK_SECRET_KEY`
-2. set the image name/tag you actually publish
-3. decide whether the deployment should run on `sqlite` or `postgres`
-4. if using PostgreSQL, fill in the `DEEPWORK_POSTGRES_*` settings and secret values
+- uses `SQLite`
+- mounts `/data` on a persistent volume claim
+- enables `DEEPWORK_PERSONAL_MODE=1`
+- pulls the public image `yavarkhodadadi/deep-work-4dx:latest`
+
+Session-secret behavior in personal mode:
+
+- if `DEEPWORK_SECRET_KEY` is provided, the app uses it
+- otherwise the app generates and persists a signing secret at `/data/deepwork-secret.key`
+- if the PVC is replaced or cloned, existing sessions are invalidated and users must log in again
+
+The older general-purpose manifest remains at `deploy/kubernetes.yaml` for manual/operator-managed setups.
+
+Before using the personal manifest in a real cluster:
+
+1. ensure your cluster has a default storage class for the PVC
+2. confirm the published image `yavarkhodadadi/deep-work-4dx:latest` is reachable
+3. bootstrap the first admin user after the pod becomes ready
+4. verify persistence by restarting the pod after creating sample data
 
 ## Configuration Reference
 
@@ -183,6 +239,7 @@ Before using it in a real cluster:
 | `HOST` | Bind host for the app server |
 | `PORT` | Bind port for the app server |
 | `DEEPWORK_SECRET_KEY` | Cookie/session signing secret |
+| `DEEPWORK_PERSONAL_MODE` | Enables persisted secret bootstrap for personal SQLite deployments |
 | `DEEPWORK_WEEK_START` | Week boundary used for reviews and scoreboards |
 | `DEEPWORK_FOCUS_MINUTES` | Default focus session duration |
 | `DEEPWORK_SHORT_BREAK_MINUTES` | Default short break duration |

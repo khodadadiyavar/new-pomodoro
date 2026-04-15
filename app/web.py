@@ -9,6 +9,7 @@ from app.security import read_session, sign_session
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+VALID_THEMES = {"light", "dark"}
 
 
 def create_app(config: AppConfig):
@@ -21,9 +22,22 @@ def create_app(config: AppConfig):
         form = parse_form(environ) if method == "POST" else {}
         cookie_header = parse_cookie(environ.get("HTTP_COOKIE", ""))
         current_user = load_current_user(service, config, cookie_header)
+        current_theme = load_theme(cookie_header)
 
         if path.startswith("/static/"):
             return serve_static(path, start_response)
+
+        if path == "/theme" and method == "POST":
+            theme = form.get("theme", "light")
+            if theme not in VALID_THEMES:
+                theme = "light"
+            location = form.get("return_to", "/")
+            headers = [
+                ("Location", location),
+                ("Set-Cookie", f"theme={theme}; Path=/; SameSite=Lax; Max-Age=31536000"),
+            ]
+            start_response("303 See Other", headers)
+            return [b""]
 
         if path == "/":
             if service.count_users() == 0:
@@ -43,6 +57,7 @@ def create_app(config: AppConfig):
                         "Create the first admin account for this installation.",
                         "/bootstrap",
                         "Create admin account",
+                        theme=current_theme,
                     ),
                 )
             try:
@@ -56,6 +71,7 @@ def create_app(config: AppConfig):
                         "/bootstrap",
                         "Create admin account",
                         error=True,
+                        theme=current_theme,
                     ),
                     status="400 Bad Request",
                 )
@@ -70,6 +86,7 @@ def create_app(config: AppConfig):
                         "Local account login for this private installation.",
                         "/login",
                         "Sign in",
+                        theme=current_theme,
                     ),
                 )
             try:
@@ -83,6 +100,7 @@ def create_app(config: AppConfig):
                         "/login",
                         "Sign in",
                         error=True,
+                        theme=current_theme,
                     ),
                     status="401 Unauthorized",
                 )
@@ -99,8 +117,11 @@ def create_app(config: AppConfig):
         if not current_user:
             return redirect(start_response, "/login")
 
+        live_session = load_live_session(service, current_user["id"])
+
         if path == "/dashboard":
             data = service.get_dashboard_data(current_user["id"])
+            data["live_session"] = live_session
             return html_response(
                 start_response,
                 render_layout(
@@ -108,6 +129,8 @@ def create_app(config: AppConfig):
                     render_dashboard(data),
                     current_user,
                     "/dashboard",
+                    theme=current_theme,
+                    live_session=live_session,
                 ),
             )
 
@@ -119,6 +142,8 @@ def create_app(config: AppConfig):
                     render_goals_index(service.list_goals(current_user["id"])),
                     current_user,
                     "/goals",
+                    theme=current_theme,
+                    live_session=live_session,
                 ),
             )
 
@@ -142,6 +167,8 @@ def create_app(config: AppConfig):
                         render_goal_detail(detail),
                         current_user,
                         "/goals",
+                        theme=current_theme,
+                        live_session=live_session,
                     ),
                 )
             if len(parts) == 3 and method == "POST":
@@ -169,6 +196,7 @@ def create_app(config: AppConfig):
                     ),
                     current_user,
                     "/focus",
+                    theme=current_theme,
                     extra_scripts=['<script src="/static/focus.js"></script>'],
                 ),
             )
@@ -185,7 +213,14 @@ def create_app(config: AppConfig):
             )
             return html_response(
                 start_response,
-                render_layout("Weekly Review", body, current_user, "/weekly-review"),
+                render_layout(
+                    "Weekly Review",
+                    body,
+                    current_user,
+                    "/weekly-review",
+                    theme=current_theme,
+                    live_session=live_session,
+                ),
             )
 
         if path == "/weekly-review/commitments" and method == "POST":
@@ -218,6 +253,8 @@ def create_app(config: AppConfig):
                     render_history(service.get_history_data(current_user["id"])),
                     current_user,
                     "/history",
+                    theme=current_theme,
+                    live_session=live_session,
                 ),
             )
 
@@ -225,12 +262,26 @@ def create_app(config: AppConfig):
             if not current_user["is_admin"]:
                 return forbidden(start_response)
             if method == "POST":
-                service.create_user(
-                    current_user["id"],
-                    form.get("email", ""),
-                    form.get("password", ""),
-                    is_admin=form.get("is_admin") == "1",
-                )
+                try:
+                    service.create_user(
+                        current_user["id"],
+                        form.get("email", ""),
+                        form.get("password", ""),
+                        is_admin=form.get("is_admin") == "1",
+                    )
+                except ValueError as error:
+                    return html_response(
+                        start_response,
+                        render_layout(
+                            "User Management",
+                            render_admin_users(service.list_users(), str(error)),
+                            current_user,
+                            "/admin/users",
+                            theme=current_theme,
+                            live_session=live_session,
+                        ),
+                        status="400 Bad Request",
+                    )
                 return redirect(start_response, "/admin/users")
             return html_response(
                 start_response,
@@ -239,8 +290,13 @@ def create_app(config: AppConfig):
                     render_admin_users(service.list_users()),
                     current_user,
                     "/admin/users",
+                    theme=current_theme,
+                    live_session=live_session,
                 ),
             )
+
+        if path == "/api/session-status" and method == "GET":
+            return json_response(start_response, live_session_payload(live_session))
 
         if path == "/api/sessions/start" and method == "POST":
             session = service.start_session(
@@ -258,20 +314,35 @@ def create_app(config: AppConfig):
             parts = [segment for segment in path.split("/") if segment]
             session_id = int(parts[2])
             action = parts[3]
-            if action == "pause":
-                session = service.pause_session(current_user["id"], session_id)
-            elif action == "resume":
-                session = service.resume_session(current_user["id"], session_id)
-            elif action == "complete":
-                session = service.complete_session(
-                    current_user["id"],
-                    session_id,
-                    note=form.get("note", ""),
+            try:
+                if action == "pause":
+                    session = service.pause_session(current_user["id"], session_id)
+                elif action == "resume":
+                    session = service.resume_session(current_user["id"], session_id)
+                elif action == "stop":
+                    session = service.stop_session(
+                        current_user["id"],
+                        session_id,
+                        note=form.get("note", ""),
+                    )
+                elif action == "complete":
+                    session = service.complete_session(
+                        current_user["id"],
+                        session_id,
+                        note=form.get("note", ""),
+                    )
+                elif action == "discard":
+                    session = service.discard_session(current_user["id"], session_id)
+                elif action == "abandon":
+                    session = service.abandon_session(current_user["id"], session_id)
+                else:
+                    return not_found(start_response)
+            except ValueError as error:
+                return json_response(
+                    start_response,
+                    {"error": str(error)},
+                    status="409 Conflict",
                 )
-            elif action == "abandon":
-                session = service.abandon_session(current_user["id"], session_id)
-            else:
-                return not_found(start_response)
             return json_response(start_response, {"session": session})
 
         return not_found(start_response)
@@ -304,6 +375,62 @@ def load_current_user(service, config, cookies):
     if not user_id:
         return None
     return service.get_user_by_id(user_id)
+
+
+def load_theme(cookies):
+    theme = cookies.get("theme", "light")
+    if theme not in VALID_THEMES:
+        return "light"
+    return theme
+
+
+def load_live_session(service, user_id):
+    stale_session = service._load_active_session(user_id)
+    session = service.get_active_session(user_id)
+    if not session:
+        transition = reconciled_session_transition(service, user_id, stale_session)
+        if transition:
+            return transition
+        return None
+    return {
+        "session": session,
+        "goal": service.get_goal(user_id, int(session["goal_id"])),
+        "just_completed": False,
+        "ended_reason": None,
+    }
+
+
+def live_session_payload(live_session):
+    if not live_session:
+        return {
+            "session": None,
+            "goal": None,
+            "just_completed": False,
+            "ended_reason": None,
+        }
+    return {
+        "session": live_session["session"],
+        "goal": live_session["goal"],
+        "just_completed": live_session.get("just_completed", False),
+        "ended_reason": live_session.get("ended_reason"),
+    }
+
+
+def reconciled_session_transition(service, user_id, previous_session):
+    if not previous_session or previous_session["state"] != "running":
+        return None
+
+    elapsed_seconds = service._elapsed_seconds_for_session(previous_session)
+    planned_seconds = int(previous_session["planned_minutes"]) * 60
+    if elapsed_seconds < planned_seconds:
+        return None
+
+    return {
+        "session": None,
+        "goal": service.get_goal(user_id, int(previous_session["goal_id"])),
+        "just_completed": True,
+        "ended_reason": "auto_finished",
+    }
 
 
 def serve_static(path, start_response):
@@ -359,7 +486,7 @@ def minutes_to_hours_label(minutes):
     return f"{hours:.1f}h"
 
 
-def render_layout(title, content, user, active_path, extra_scripts=None):
+def render_layout(title, content, user, active_path, theme="light", live_session=None, extra_scripts=None):
     extra_scripts = extra_scripts or []
     nav_links = [
         ("/dashboard", "Dashboard"),
@@ -376,6 +503,8 @@ def render_layout(title, content, user, active_path, extra_scripts=None):
         for href, label in nav_links
     )
     scripts = "".join(extra_scripts)
+    theme_control = render_theme_control(theme, active_path)
+    live_session_bar = render_live_session_bar(live_session)
     return f"""<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -384,7 +513,7 @@ def render_layout(title, content, user, active_path, extra_scripts=None):
     <title>{escape(title)} · Deep Work 4DX</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body>
+  <body data-theme="{escape(theme)}">
     <div class="background-orb background-orb-left"></div>
     <div class="background-orb background-orb-right"></div>
     <div class="shell">
@@ -395,6 +524,7 @@ def render_layout(title, content, user, active_path, extra_scripts=None):
         </div>
         <nav class="nav">{nav_html}</nav>
         <div class="sidebar-footer">
+          {theme_control}
           <div class="user-chip">{escape(user["email"])}</div>
           <form method="POST" action="/logout">
             <button class="ghost-button" type="submit">Sign out</button>
@@ -402,6 +532,7 @@ def render_layout(title, content, user, active_path, extra_scripts=None):
         </div>
       </aside>
       <main class="content">
+        {live_session_bar}
         <header class="page-header">
           <div>
             <p class="eyebrow">Private self-hosted deep work</p>
@@ -416,7 +547,7 @@ def render_layout(title, content, user, active_path, extra_scripts=None):
 </html>"""
 
 
-def render_auth_page(title, subtitle, action, button_label, error=False):
+def render_auth_page(title, subtitle, action, button_label, error=False, theme="light"):
     tone_class = "auth-copy auth-copy-error" if error else "auth-copy"
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -426,7 +557,7 @@ def render_auth_page(title, subtitle, action, button_label, error=False):
     <title>{escape(title)} · Deep Work 4DX</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body class="auth-body">
+  <body class="auth-body" data-theme="{escape(theme)}">
     <div class="auth-shell">
       <section class="auth-panel auth-panel-hero">
         <p class="eyebrow">Deep Work 4DX</p>
@@ -453,6 +584,42 @@ def render_auth_page(title, subtitle, action, button_label, error=False):
 </html>"""
 
 
+def render_theme_control(theme, return_to, compact=False):
+    wrapper_class = "theme-control theme-control-compact" if compact else "theme-control"
+    return f"""
+    <form method="POST" action="/theme" class="{wrapper_class}">
+      <input type="hidden" name="return_to" value="{escape(return_to)}" />
+      <label>
+        <span>Theme</span>
+        <select name="theme" onchange="this.form.submit()">
+          <option value="light" {"selected" if theme == "light" else ""}>Light</option>
+          <option value="dark" {"selected" if theme == "dark" else ""}>Dark</option>
+        </select>
+      </label>
+    </form>
+    """
+
+
+def render_live_session_bar(live_session):
+    if not live_session or not live_session.get("session"):
+        return ""
+    session = live_session["session"]
+    goal = live_session["goal"] or {}
+    return f"""
+    <section class="panel live-session-bar" data-live-session-bar>
+      <div class="live-session-copy">
+        <p class="eyebrow">Live session</p>
+        <h3>{escape(goal.get("title", "Focus session"))}</h3>
+        <p class="muted">Session is {escape(session["state"])}. Jump back into focus mode to pause, stop, or add a note.</p>
+      </div>
+      <div class="live-session-actions">
+        <span class="status-pill">{escape(session["state"].replace("_", " ").title())}</span>
+        <a class="secondary-button inline-button" href="/focus">Open focus view</a>
+      </div>
+    </section>
+    """
+
+
 def render_dashboard(data):
     scoreboard = data["scoreboard"]
     total_target = scoreboard["total_target_minutes"]
@@ -477,53 +644,109 @@ def render_dashboard(data):
     if not goals_html:
         goals_html = '<article class="metric-card"><h3>No weekly commitments yet</h3><p class="muted">Set target hours in Weekly Review to turn goals into a scoreboard.</p></article>'
 
+    active_goals_html = "".join(
+        f"<li><strong>{escape(goal['title'])}</strong><span>{escape(goal['status'].title())}</span></li>"
+        for goal in data["active_goals"][:3]
+    ) or "<li><strong>No active goals yet</strong><span>Add a goal and commit weekly hours to make the dashboard useful.</span></li>"
+
     milestones_html = "".join(
-        f"<li><strong>{escape(item['goal_title'])}</strong><span>{escape(item['content'])}</span></li>"
+        f"<li><span>{escape(item['goal_title'])}</span><strong>{escape(item['content'])}</strong></li>"
         for item in data["recent_milestones"]
     ) or "<li><span>No milestones recorded yet.</span></li>"
 
     overdue_html = "".join(
-        f"<li>Week of {escape(review['week_start'])} is overdue.</li>"
+        f"<li><strong>Week of {escape(review['week_start'])}</strong><span>Review is overdue. Close the loop before the next commitment cycle.</span></li>"
         for review in data["overdue_reviews"]
-    ) or "<li>No overdue reviews.</li>"
+    ) or "<li><strong>On rhythm</strong><span>No overdue reviews. Weekly accountability is current.</span></li>"
 
-    active_session_html = ""
-    if data["active_session"]:
-        active_session_html = f"""
-        <article class="hero-card hero-card-warning">
-          <p class="eyebrow">Active focus session</p>
-          <h3>Resume your current session</h3>
-          <p>You already have a {escape(data["active_session"]["state"])} session in progress.</p>
+    current_focus_html = ""
+    live_session = data.get("live_session")
+    if live_session and live_session.get("session"):
+        session = live_session["session"]
+        goal = live_session["goal"] or {}
+        current_focus_html = f"""
+        <article class="hero-card hero-card-warning current-focus-card" data-current-focus-widget>
+          <p class="eyebrow">Current focus</p>
+          <h3>{escape(goal.get("title", "Resume your current session"))}</h3>
+          <p>Session is {escape(session["state"])}. Re-open the focus screen to keep the timer moving.</p>
+          <div class="current-focus-meta">
+            <span class="status-pill">{escape(session["state"].replace("_", " ").title())}</span>
+            <span class="muted">One active focus session at a time.</span>
+          </div>
           <a class="primary-button inline-button" href="/focus">Open focus view</a>
+        </article>
+        """
+    else:
+        current_focus_html = f"""
+        <article class="hero-card current-focus-card" data-current-focus-widget>
+          <p class="eyebrow">Current focus</p>
+          <h3>Choose the next session that moves the weekly scoreboard.</h3>
+          <p class="muted">Pick an active goal, then start a focused block with a concrete note about what should move.</p>
+          <ul class="activity-list compact-list">{active_goals_html}</ul>
+          <div class="button-row">
+            <a class="primary-button inline-button" href="/focus">Start focus session</a>
+            <a class="secondary-button inline-button" href="/goals">Review goals</a>
+          </div>
         </article>
         """
 
     return f"""
     <section class="dashboard-grid">
-      <article class="hero-card">
-        <p class="eyebrow">Weekly Focus</p>
-        <h3>{minutes_to_hours_label(total_actual)} logged against {minutes_to_hours_label(total_target)} committed</h3>
-        <div class="progress progress-hero">
-          <div class="progress-bar" style="width:{progress_ratio * 100:.0f}%"></div>
-        </div>
-        <p class="muted">The dashboard stays anchored to this week’s commitments instead of all-time busyness.</p>
-        <div class="button-row">
-          <a class="primary-button inline-button" href="/focus">Start focus session</a>
-          <a class="secondary-button inline-button" href="/weekly-review">Review commitments</a>
-        </div>
-      </article>
-      {active_session_html}
-      <section class="card-stack">
+      <section class="dashboard-main-column">
+        {current_focus_html}
+        <article class="hero-card dashboard-hero">
+          <p class="eyebrow">Weekly focus</p>
+          <h3>{minutes_to_hours_label(total_actual)} logged against {minutes_to_hours_label(total_target)} committed</h3>
+          <p class="muted">Deep work is scored against this week only so the dashboard shows whether current commitments are being honored.</p>
+          <div class="progress progress-hero">
+            <div class="progress-bar" style="width:{progress_ratio * 100:.0f}%"></div>
+          </div>
+          <div class="dashboard-summary">
+            <article class="summary-tile">
+              <span>Committed</span>
+              <strong>{minutes_to_hours_label(total_target)}</strong>
+            </article>
+            <article class="summary-tile">
+              <span>Logged</span>
+              <strong>{minutes_to_hours_label(total_actual)}</strong>
+            </article>
+            <article class="summary-tile">
+              <span>Goals in play</span>
+              <strong>{len(scoreboard["goals"])}</strong>
+            </article>
+          </div>
+          <div class="button-row">
+            <a class="primary-button inline-button" href="/focus">Start focus session</a>
+            <a class="secondary-button inline-button" href="/weekly-review">Review commitments</a>
+          </div>
+        </article>
+      </section>
+      <section class="dashboard-side-column card-stack">
         <article class="panel">
-          <div class="panel-header"><h3>Goal scoreboard</h3></div>
-          {goals_html}
+          <div class="panel-header">
+            <div>
+              <h3>This week's goal scoreboard</h3>
+              <p class="muted">See which commitments are on pace, behind, or already complete.</p>
+            </div>
+          </div>
+          <div class="metric-stack">{goals_html}</div>
         </article>
         <article class="panel">
-          <div class="panel-header"><h3>Recent milestones</h3></div>
+          <div class="panel-header">
+            <div>
+              <h3>Milestone momentum</h3>
+              <p class="muted">Recent proof that active goals are moving.</p>
+            </div>
+          </div>
           <ul class="activity-list">{milestones_html}</ul>
         </article>
         <article class="panel">
-          <div class="panel-header"><h3>Review cadence</h3></div>
+          <div class="panel-header">
+            <div>
+              <h3>Review cadence</h3>
+              <p class="muted">Keep weekly commitments honest before they drift.</p>
+            </div>
+          </div>
           <ul class="activity-list">{overdue_html}</ul>
         </article>
       </section>
@@ -567,25 +790,60 @@ def render_goals_index(goals):
 def render_goal_detail(detail):
     goal = detail["goal"]
     milestones = "".join(
-        f"<li><span>{escape(item['created_at'][:10])}</span><strong>{escape(item['content'])}</strong></li>"
+        f"""
+        <li>
+          <span>{escape(item['created_at'][:10])}</span>
+          <strong>{escape(item['content'])}</strong>
+          <span class="muted">Recorded as progress toward this goal.</span>
+        </li>
+        """
         for item in detail["milestones"]
     ) or "<li><span>No milestones yet.</span></li>"
     notes = "".join(
-        f"<li><span>{escape(item['created_at'][:10])}</span><strong>{escape(item['content'])}</strong></li>"
+        f"""
+        <li>
+          <span>{escape(item['created_at'][:10])}</span>
+          <strong>{escape(item['content'])}</strong>
+          <span class="muted">Saved note for future weekly reviews.</span>
+        </li>
+        """
         for item in detail["notes"]
     ) or "<li><span>No notes yet.</span></li>"
     sessions = "".join(
-        f"<li><span>{escape(item['started_at'][:16].replace('T', ' '))}</span><strong>{item['state']}</strong><span>{minutes_to_hours_label(item['actual_minutes'])}</span></li>"
+        f"""
+        <li class="session-history-item">
+          <div class="session-history-meta">
+            <span>{escape(item['started_at'][:16].replace('T', ' '))}</span>
+            <span class="status-pill">{escape(item['state'].replace('_', ' ').title())}</span>
+          </div>
+          <strong>Duration</strong>
+          <span>{minutes_to_hours_label(item['actual_minutes'])} focused</span>
+          <span>{escape(item['note'] or 'No session note recorded.')}</span>
+        </li>
+        """
         for item in detail["sessions"][:10]
     ) or "<li><span>No sessions yet.</span></li>"
 
     return f"""
     <section class="goal-detail-grid">
-      <article class="hero-card">
+      <article class="hero-card goal-detail-hero">
         <p class="eyebrow">{escape(goal['status'])}</p>
         <h3>{escape(goal['title'])}</h3>
         <p>{escape(goal['description'] or 'No description yet.')}</p>
-        <p class="muted">Completed deep work: {minutes_to_hours_label(detail['total_minutes'])}</p>
+        <div class="dashboard-summary goal-detail-summary">
+          <article class="summary-tile">
+            <span>Completed deep work</span>
+            <strong>{minutes_to_hours_label(detail['total_minutes'])}</strong>
+          </article>
+          <article class="summary-tile">
+            <span>Milestones</span>
+            <strong>{len(detail['milestones'])}</strong>
+          </article>
+          <article class="summary-tile">
+            <span>Tracked sessions</span>
+            <strong>{len(detail['sessions'])}</strong>
+          </article>
+        </div>
         <div class="button-row">
           <a class="primary-button inline-button" href="/focus">Start session</a>
           <form method="POST" action="/goals/{goal['id']}/status">
@@ -613,15 +871,15 @@ def render_goal_detail(detail):
         </form>
       </article>
       <article class="panel">
-        <div class="panel-header"><h3>Milestones</h3></div>
+        <div class="panel-header"><h3>Milestone timeline</h3></div>
         <ul class="activity-list">{milestones}</ul>
       </article>
       <article class="panel">
-        <div class="panel-header"><h3>Notes</h3></div>
+        <div class="panel-header"><h3>Goal notes</h3></div>
         <ul class="activity-list">{notes}</ul>
       </article>
       <article class="panel">
-        <div class="panel-header"><h3>Recent sessions</h3></div>
+        <div class="panel-header"><h3>Session history</h3></div>
         <ul class="activity-list">{sessions}</ul>
       </article>
     </section>
@@ -645,8 +903,8 @@ def render_focus_page(user, goals, active_session, config):
           <button class="primary-button inline-button" id="start-session-button">Start session</button>
           <button class="secondary-button inline-button" id="pause-session-button" type="button">Pause</button>
           <button class="secondary-button inline-button" id="resume-session-button" type="button">Resume</button>
-          <button class="ghost-button inline-button" id="complete-session-button" type="button">Complete</button>
-          <button class="ghost-button inline-button" id="abandon-session-button" type="button">Abandon</button>
+          <button class="ghost-button inline-button" id="stop-session-button" type="button">Stop</button>
+          <button class="ghost-button inline-button" id="discard-session-button" type="button">Discard</button>
         </div>
       </article>
       <article class="panel">
@@ -767,15 +1025,19 @@ def render_history(data):
     """
 
 
-def render_admin_users(users):
+def render_admin_users(users, error_message=""):
     rows = "".join(
         f"<li><strong>{escape(user['email'])}</strong><span>{'Admin' if user['is_admin'] else 'Member'}</span></li>"
         for user in users
     )
+    error_html = ""
+    if error_message:
+        error_html = f'<p class="auth-copy auth-copy-error">{escape(error_message)}</p>'
     return f"""
     <section class="two-column">
       <article class="panel">
         <div class="panel-header"><h3>Create user</h3></div>
+        {error_html}
         <form method="POST" action="/admin/users" class="stack">
           <label><span>Email</span><input type="email" name="email" required /></label>
           <label><span>Password</span><input type="password" name="password" required /></label>

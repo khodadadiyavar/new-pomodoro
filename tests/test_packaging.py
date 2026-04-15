@@ -30,6 +30,42 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("DEEPWORK_SECRET_KEY", manifest)
         self.assertIn("mountPath: /data", manifest)
 
+    def test_personal_kubernetes_manifest_targets_public_dockerhub_image(self):
+        manifest_path = ROOT / "deploy" / "kubernetes-personal.yaml"
+        manifest = manifest_path.read_text()
+
+        self.assertTrue(manifest_path.exists())
+        self.assertIn("DEEPWORK_PERSONAL_MODE: \"1\"", manifest)
+        self.assertIn("DEEPWORK_DB_BACKEND: sqlite", manifest)
+        self.assertIn("image: yavarkhodadadi/deep-work-4dx:latest", manifest)
+        self.assertIn("mountPath: /data", manifest)
+
+    def test_readme_documents_personal_kubernetes_apply_path(self):
+        readme = (ROOT / "README.md").read_text()
+
+        self.assertIn("kubectl apply -f deploy/kubernetes-personal.yaml", readme)
+        self.assertIn("yavarkhodadadi/deep-work-4dx:latest", readme)
+        self.assertIn("DEEPWORK_PERSONAL_MODE", readme)
+
+    def test_github_actions_workflow_publishes_docker_image(self):
+        workflow_path = ROOT / ".github" / "workflows" / "docker-publish.yml"
+        workflow = workflow_path.read_text()
+
+        self.assertTrue(workflow_path.exists())
+        self.assertIn("docker/login-action", workflow)
+        self.assertIn("docker/build-push-action", workflow)
+        self.assertIn("yavarkhodadadi/deep-work-4dx", workflow)
+
+    def test_personal_kubernetes_smoke_script_exists(self):
+        smoke_script_path = ROOT / "scripts" / "k8s_personal_smoke.sh"
+        smoke_script = smoke_script_path.read_text()
+
+        self.assertTrue(smoke_script_path.exists())
+        self.assertIn("kind", smoke_script)
+        self.assertIn("MANIFEST_PATH", smoke_script)
+        self.assertIn("kubernetes-personal.yaml", smoke_script)
+        self.assertIn("deepwork-personal", smoke_script)
+
 
 if __name__ == "__main__":
     unittest.main()
