@@ -296,12 +296,12 @@ class DeepWorkService:
                 (current_day.isoformat(),),
             )
 
-    def upsert_weekly_commitment(self, user_id: int, week_start: str, goal_id: int, target_hours: int):
+    def upsert_weekly_commitment(self, user_id: int, week_start: str, goal_id: int, target_minutes: int):
         review = self.get_weekly_review(user_id, week_start)
         if not review:
             review = self.get_or_create_weekly_review(user_id, today=date.fromisoformat(week_start))
 
-        target_minutes = int(target_hours) * 60
+        target_minutes = int(target_minutes)
         with self._connect() as connection:
             connection.execute(
                 """

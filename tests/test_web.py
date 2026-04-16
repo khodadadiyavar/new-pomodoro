@@ -290,12 +290,51 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("Session is running", dashboard_body)
         self.assertIn("This week's goal scoreboard", dashboard_body)
         self.assertIn("Milestone momentum", dashboard_body)
+        self.assertIn("Time left", dashboard_body)
+        self.assertIn("data-live-session-countdown", dashboard_body)
 
         status, _, goals_body = run_wsgi_request(self.app, "/goals", cookie=cookie)
         self.assertEqual(status, "200 OK")
         self.assertIn("data-live-session-bar", goals_body)
         self.assertIn("Ship v1", goals_body)
+        self.assertIn("data-live-session-countdown", goals_body)
         self.assertNotIn("data-current-focus-widget", goals_body)
+
+    def test_weekly_review_and_dashboard_use_minutes_as_the_unit(self):
+        self.service.init_db()
+        admin = self.service.bootstrap_admin("admin@example.com", "password")
+        goal = self.service.create_goal(admin["id"], "Ship v1", "Deliver it")
+        review = self.service.get_or_create_weekly_review(admin["id"], today=datetime.utcnow().date())
+        self.service.upsert_weekly_commitment(
+            admin["id"], review["week_start"], goal["id"], target_minutes=125
+        )
+        session = self.service.start_session(
+            admin["id"],
+            goal["id"],
+            25,
+            started_at=datetime.utcnow() - timedelta(minutes=40),
+        )
+        self.service.stop_session(
+            admin["id"],
+            session["id"],
+            ended_at=datetime.utcnow() - timedelta(minutes=15),
+            note="Wrapped the focused work block",
+        )
+        cookie = self.login_cookie()
+
+        weekly_status, _, weekly_body = run_wsgi_request(self.app, "/weekly-review", cookie=cookie)
+        self.assertEqual(weekly_status, "200 OK")
+        self.assertIn("Target minutes", weekly_body)
+        self.assertIn('value="125"', weekly_body)
+        self.assertNotIn("Target hours", weekly_body)
+
+        dashboard_status, _, dashboard_body = run_wsgi_request(self.app, "/dashboard", cookie=cookie)
+        self.assertEqual(dashboard_status, "200 OK")
+        self.assertIn("25 min logged against 125 min committed", dashboard_body)
+        self.assertIn("125 min", dashboard_body)
+        self.assertIn("25 min / 125 min", dashboard_body)
+        self.assertIn("Delta -100 min", dashboard_body)
+        self.assertNotIn("0.4h", dashboard_body)
 
     def test_focus_page_uses_stop_and_discard_controls(self):
         self.service.init_db()
@@ -447,8 +486,9 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("Milestone timeline", body)
         self.assertIn("Session history", body)
         self.assertIn("Duration", body)
-        self.assertIn("0.9h focused", body)
+        self.assertIn("55 min focused", body)
         self.assertIn("Closed the launch checklist and captured follow-up notes", body)
+        self.assertNotIn("0.9h focused", body)
 
 
 if __name__ == "__main__":

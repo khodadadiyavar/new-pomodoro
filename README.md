@@ -32,7 +32,7 @@ Most tools are good at storing tasks and bad at shaping attention.
 Deep Work 4DX is built around a tighter loop:
 
 1. choose a few goals that matter this week
-2. commit target hours
+2. commit target minutes
 3. run focused sessions against those goals
 4. record milestones and notes as progress happens
 5. review target versus actual performance at week end
@@ -40,7 +40,7 @@ Deep Work 4DX is built around a tighter loop:
 That means the app is intentionally opinionated:
 
 - goals are first-class
-- weekly commitments are measured in hours
+- weekly commitments are measured in minutes
 - focus sessions belong to a goal
 - milestones stay append-only
 - user data is private by default even on a shared installation
@@ -53,7 +53,7 @@ That means the app is intentionally opinionated:
 | Multi-user | Multiple users on one installation, isolated private data |
 | Goals | Create goals, track status, attach milestones and notes |
 | Focus | Run in-app focus sessions with timer-driven logging |
-| Weekly review | Set target hours, review actual progress, carry forward notes |
+| Weekly review | Set target minutes, review actual progress, carry forward notes |
 | History | View weekly totals and milestone activity |
 | Deployment | Local Python run, Docker Compose, Kubernetes manifest |
 | Persistence | SQLite quick-start or PostgreSQL-backed startup |

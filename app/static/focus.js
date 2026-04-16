@@ -14,6 +14,16 @@
     return Boolean(current && current.id);
   }
 
+  function parseTimestamp(value) {
+    if (!value) {
+      return null;
+    }
+    if (/[zZ]|[+-]\d\d:\d\d$/.test(value)) {
+      return new Date(value);
+    }
+    return new Date(`${value}Z`);
+  }
+
   function formatSeconds(totalSeconds) {
     const seconds = Math.max(0, Math.floor(totalSeconds));
     const minutes = Math.floor(seconds / 60);
@@ -50,8 +60,10 @@
     }
     let elapsed = Number(current.elapsed_seconds || 0);
     if (current.state === "running" && current.last_state_change_at) {
-      const then = new Date(current.last_state_change_at);
-      elapsed += Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+      const then = parseTimestamp(current.last_state_change_at);
+      if (then && !Number.isNaN(then.getTime())) {
+        elapsed += Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+      }
     }
     return elapsed;
   }

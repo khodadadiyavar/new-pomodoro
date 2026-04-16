@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from html import escape
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -481,13 +482,39 @@ def forbidden(start_response):
     return html_response(start_response, "<h1>Forbidden</h1>", status="403 Forbidden")
 
 
-def minutes_to_hours_label(minutes):
-    hours = minutes / 60
-    return f"{hours:.1f}h"
+def minutes_to_minutes_label(minutes):
+    return f"{int(minutes)} min"
+
+
+def session_elapsed_seconds(session):
+    elapsed = int(session.get("elapsed_seconds", 0))
+    if session.get("state") == "running" and session.get("last_state_change_at"):
+        last_change = datetime.fromisoformat(session["last_state_change_at"])
+        elapsed += max(0, int((datetime.utcnow().replace(microsecond=0) - last_change).total_seconds()))
+    return elapsed
+
+
+def session_remaining_seconds(session):
+    planned_seconds = int(session.get("planned_minutes", 25)) * 60
+    return max(0, planned_seconds - session_elapsed_seconds(session))
+
+
+def format_seconds_label(total_seconds):
+    total_seconds = max(0, int(total_seconds))
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def live_session_json(live_session):
+    if not live_session or not live_session.get("session"):
+        return ""
+    return escape(json.dumps(live_session_payload(live_session)))
 
 
 def render_layout(title, content, user, active_path, theme="light", live_session=None, extra_scripts=None):
     extra_scripts = extra_scripts or []
+    extra_scripts.append('<script src="/static/live-session.js"></script>')
     nav_links = [
         ("/dashboard", "Dashboard"),
         ("/goals", "Goals"),
@@ -505,6 +532,12 @@ def render_layout(title, content, user, active_path, theme="light", live_session
     scripts = "".join(extra_scripts)
     theme_control = render_theme_control(theme, active_path)
     live_session_bar = render_live_session_bar(live_session)
+    live_session_state = ""
+    live_session_blob = live_session_json(live_session)
+    if live_session_blob:
+        live_session_state = (
+            f"<div hidden data-live-session-state data-live-session='{live_session_blob}'></div>"
+        )
     return f"""<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -532,6 +565,7 @@ def render_layout(title, content, user, active_path, theme="light", live_session
         </div>
       </aside>
       <main class="content">
+        {live_session_state}
         {live_session_bar}
         <header class="page-header">
           <div>
@@ -605,14 +639,19 @@ def render_live_session_bar(live_session):
         return ""
     session = live_session["session"]
     goal = live_session["goal"] or {}
+    countdown = format_seconds_label(session_remaining_seconds(session))
     return f"""
     <section class="panel live-session-bar" data-live-session-bar>
       <div class="live-session-copy">
         <p class="eyebrow">Live session</p>
         <h3>{escape(goal.get("title", "Focus session"))}</h3>
-        <p class="muted">Session is {escape(session["state"])}. Jump back into focus mode to pause, stop, or add a note.</p>
+        <p class="muted" data-live-session-state-text>Session is {escape(session["state"])}. Jump back into focus mode to pause, stop, or add a note.</p>
       </div>
       <div class="live-session-actions">
+        <div class="live-session-countdown-group">
+          <span>Time left</span>
+          <strong data-live-session-countdown>{countdown}</strong>
+        </div>
         <span class="status-pill">{escape(session["state"].replace("_", " ").title())}</span>
         <a class="secondary-button inline-button" href="/focus">Open focus view</a>
       </div>
@@ -633,21 +672,21 @@ def render_dashboard(data):
         <article class="metric-card">
           <div class="metric-card-header">
             <h3>{escape(goal["title"])}</h3>
-            <span>{minutes_to_hours_label(goal["actual_minutes"])} / {minutes_to_hours_label(goal["target_minutes"])}</span>
+            <span>{minutes_to_minutes_label(goal["actual_minutes"])} / {minutes_to_minutes_label(goal["target_minutes"])}</span>
           </div>
           <div class="progress">
             <div class="progress-bar" style="width:{ratio * 100:.0f}%"></div>
           </div>
-          <p class="muted">Status: {escape(goal["status"])} · Delta {minutes_to_hours_label(goal["delta_minutes"])}</p>
+          <p class="muted">Status: {escape(goal["status"])} · Delta {minutes_to_minutes_label(goal["delta_minutes"])}</p>
         </article>
         """
     if not goals_html:
-        goals_html = '<article class="metric-card"><h3>No weekly commitments yet</h3><p class="muted">Set target hours in Weekly Review to turn goals into a scoreboard.</p></article>'
+        goals_html = '<article class="metric-card"><h3>No weekly commitments yet</h3><p class="muted">Set target minutes in Weekly Review to turn goals into a scoreboard.</p></article>'
 
     active_goals_html = "".join(
         f"<li><strong>{escape(goal['title'])}</strong><span>{escape(goal['status'].title())}</span></li>"
         for goal in data["active_goals"][:3]
-    ) or "<li><strong>No active goals yet</strong><span>Add a goal and commit weekly hours to make the dashboard useful.</span></li>"
+    ) or "<li><strong>No active goals yet</strong><span>Add a goal and commit weekly minutes to make the dashboard useful.</span></li>"
 
     milestones_html = "".join(
         f"<li><span>{escape(item['goal_title'])}</span><strong>{escape(item['content'])}</strong></li>"
@@ -664,11 +703,16 @@ def render_dashboard(data):
     if live_session and live_session.get("session"):
         session = live_session["session"]
         goal = live_session["goal"] or {}
+        countdown = format_seconds_label(session_remaining_seconds(session))
         current_focus_html = f"""
         <article class="hero-card hero-card-warning current-focus-card" data-current-focus-widget>
           <p class="eyebrow">Current focus</p>
           <h3>{escape(goal.get("title", "Resume your current session"))}</h3>
-          <p>Session is {escape(session["state"])}. Re-open the focus screen to keep the timer moving.</p>
+          <p data-live-session-state-text>Session is {escape(session["state"])}. Re-open the focus screen to keep the timer moving.</p>
+          <div class="current-focus-countdown">
+            <span>Time left</span>
+            <strong data-live-session-countdown>{countdown}</strong>
+          </div>
           <div class="current-focus-meta">
             <span class="status-pill">{escape(session["state"].replace("_", " ").title())}</span>
             <span class="muted">One active focus session at a time.</span>
@@ -696,7 +740,7 @@ def render_dashboard(data):
         {current_focus_html}
         <article class="hero-card dashboard-hero">
           <p class="eyebrow">Weekly focus</p>
-          <h3>{minutes_to_hours_label(total_actual)} logged against {minutes_to_hours_label(total_target)} committed</h3>
+          <h3>{minutes_to_minutes_label(total_actual)} logged against {minutes_to_minutes_label(total_target)} committed</h3>
           <p class="muted">Deep work is scored against this week only so the dashboard shows whether current commitments are being honored.</p>
           <div class="progress progress-hero">
             <div class="progress-bar" style="width:{progress_ratio * 100:.0f}%"></div>
@@ -704,11 +748,11 @@ def render_dashboard(data):
           <div class="dashboard-summary">
             <article class="summary-tile">
               <span>Committed</span>
-              <strong>{minutes_to_hours_label(total_target)}</strong>
+              <strong>{minutes_to_minutes_label(total_target)}</strong>
             </article>
             <article class="summary-tile">
               <span>Logged</span>
-              <strong>{minutes_to_hours_label(total_actual)}</strong>
+              <strong>{minutes_to_minutes_label(total_actual)}</strong>
             </article>
             <article class="summary-tile">
               <span>Goals in play</span>
@@ -767,7 +811,7 @@ def render_goals_index(goals):
         </article>
         """
         for goal in goals
-    ) or '<article class="goal-card"><h3>No goals yet</h3><p class="muted">Create a goal, then commit weekly hours against it.</p></article>'
+    ) or '<article class="goal-card"><h3>No goals yet</h3><p class="muted">Create a goal, then commit weekly minutes against it.</p></article>'
 
     return f"""
     <section class="two-column">
@@ -817,7 +861,7 @@ def render_goal_detail(detail):
             <span class="status-pill">{escape(item['state'].replace('_', ' ').title())}</span>
           </div>
           <strong>Duration</strong>
-          <span>{minutes_to_hours_label(item['actual_minutes'])} focused</span>
+          <span>{minutes_to_minutes_label(item['actual_minutes'])} focused</span>
           <span>{escape(item['note'] or 'No session note recorded.')}</span>
         </li>
         """
@@ -833,7 +877,7 @@ def render_goal_detail(detail):
         <div class="dashboard-summary goal-detail-summary">
           <article class="summary-tile">
             <span>Completed deep work</span>
-            <strong>{minutes_to_hours_label(detail['total_minutes'])}</strong>
+            <strong>{minutes_to_minutes_label(detail['total_minutes'])}</strong>
           </article>
           <article class="summary-tile">
             <span>Milestones</span>
@@ -938,14 +982,14 @@ def render_weekly_review(review, commitments, scoreboard, goals):
     commitment_lookup = {item["goal_id"]: item for item in commitments}
     rows = ""
     for goal in goals:
-        current_hours = ""
+        current_minutes = ""
         if goal["id"] in commitment_lookup:
-            current_hours = str(int(commitment_lookup[goal["id"]]["target_minutes"] / 60))
+            current_minutes = str(int(commitment_lookup[goal["id"]]["target_minutes"]))
         rows += f"""
         <tr>
           <td>{escape(goal['title'])}</td>
           <td>{escape(goal['status'])}</td>
-          <td><input type="number" min="0" step="1" name="goal-{goal['id']}" value="{current_hours}" /></td>
+          <td><input type="number" min="0" step="1" name="goal-{goal['id']}" value="{current_minutes}" /></td>
         </tr>
         """
 
@@ -954,13 +998,13 @@ def render_weekly_review(review, commitments, scoreboard, goals):
         <article class="metric-card">
           <div class="metric-card-header">
             <h3>{escape(goal['title'])}</h3>
-            <span>{minutes_to_hours_label(goal['actual_minutes'])} / {minutes_to_hours_label(goal['target_minutes'])}</span>
+            <span>{minutes_to_minutes_label(goal['actual_minutes'])} / {minutes_to_minutes_label(goal['target_minutes'])}</span>
           </div>
-          <p class="muted">Delta: {minutes_to_hours_label(goal['delta_minutes'])}</p>
+          <p class="muted">Delta: {minutes_to_minutes_label(goal['delta_minutes'])}</p>
         </article>
         """
         for goal in scoreboard["goals"]
-    ) or '<article class="metric-card"><h3>No committed goals</h3><p class="muted">Add target hours below.</p></article>'
+    ) or '<article class="metric-card"><h3>No committed goals</h3><p class="muted">Add target minutes below.</p></article>'
 
     return f"""
     <section class="two-column">
@@ -969,7 +1013,7 @@ def render_weekly_review(review, commitments, scoreboard, goals):
         <p class="muted">Week of {escape(review['week_start'])} to {escape(review['week_end'])}. Status: {escape(review['status'])}.</p>
         <form method="POST" action="/weekly-review/commitments" class="stack">
           <table class="review-table">
-            <thead><tr><th>Goal</th><th>Status</th><th>Target hours</th></tr></thead>
+            <thead><tr><th>Goal</th><th>Status</th><th>Target minutes</th></tr></thead>
             <tbody>{rows}</tbody>
           </table>
           <button class="primary-button" type="submit">Save commitments</button>
@@ -1001,7 +1045,7 @@ def render_history(data):
         <div class="history-bar-group">
           <div class="history-bar" style="height:{max(16, (item['total_minutes'] / max_minutes) * 220):.0f}px"></div>
           <span>{escape(item['week_start'])}</span>
-          <strong>{minutes_to_hours_label(item['total_minutes'])}</strong>
+          <strong>{minutes_to_minutes_label(item['total_minutes'])}</strong>
         </div>
         """
         for item in data["weekly_totals"]

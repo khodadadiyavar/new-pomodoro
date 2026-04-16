@@ -13,8 +13,8 @@
   --radius-lg: 28px;
   --radius-md: 18px;
   --radius-sm: 12px;
-  --font-body: "Avenir Next", "Segoe UI", sans-serif;
-  --font-heading: "Iowan Old Style", "Palatino Linotype", serif;
+  --font-body: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+  --font-heading: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
   --sidebar-bg: rgba(13, 30, 74, 0.94);
   --sidebar-text: #f2f8ff;
   --field-bg: rgba(248, 251, 255, 0.96);

@@ -40,7 +40,7 @@ class DeepWorkServiceTests(unittest.TestCase):
 
         review = self.service.get_or_create_weekly_review(user["id"], today=date(2026, 4, 14))
         self.service.upsert_weekly_commitment(
-            user["id"], review["week_start"], goal["id"], target_hours=5
+            user["id"], review["week_start"], goal["id"], target_minutes=300
         )
 
         started_at = datetime(2026, 4, 14, 9, 0, 0)
@@ -69,7 +69,7 @@ class DeepWorkServiceTests(unittest.TestCase):
         goal = self.service.create_goal(user["id"], "Read deeply", "Study technical books")
         review = self.service.get_or_create_weekly_review(user["id"], today=date(2026, 4, 14))
         self.service.upsert_weekly_commitment(
-            user["id"], review["week_start"], goal["id"], target_hours=3
+            user["id"], review["week_start"], goal["id"], target_minutes=180
         )
 
         session = self.service.start_session(
