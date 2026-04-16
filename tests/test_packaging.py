@@ -52,8 +52,10 @@ class PackagingTests(unittest.TestCase):
         workflow = workflow_path.read_text()
 
         self.assertTrue(workflow_path.exists())
+        self.assertIn("docker/setup-qemu-action", workflow)
         self.assertIn("docker/login-action", workflow)
         self.assertIn("docker/build-push-action", workflow)
+        self.assertIn("platforms: linux/amd64,linux/arm64", workflow)
         self.assertIn("yavarkhodadadi/deep-work-4dx", workflow)
 
     def test_personal_kubernetes_smoke_script_exists(self):
