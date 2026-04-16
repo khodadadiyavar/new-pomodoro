@@ -459,13 +459,6 @@ textarea {
   margin: 12px 0 16px;
 }
 
-.focus-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.preset-chip,
 .checkbox-row {
   display: inline-flex;
   align-items: center;

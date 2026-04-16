@@ -350,6 +350,9 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(">Discard</button>", body)
         self.assertNotIn('id="complete-session-button"', body)
         self.assertNotIn('id="abandon-session-button"', body)
+        self.assertNotIn("Focus 25m", body)
+        self.assertNotIn("Short break 5m", body)
+        self.assertNotIn("Long break 15m", body)
 
     def test_focus_page_does_not_seed_stale_active_session_payload(self):
         self.service.init_db()

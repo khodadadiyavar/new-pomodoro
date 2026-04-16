@@ -966,11 +966,6 @@ def render_focus_page(user, goals, active_session, config):
             <span>Session note</span>
             <textarea id="session-note" rows="4" placeholder="What moved forward in this session?"></textarea>
           </label>
-          <div class="focus-presets">
-            <span class="preset-chip">Focus {config.focus_minutes}m</span>
-            <span class="preset-chip">Short break {config.short_break_minutes}m</span>
-            <span class="preset-chip">Long break {config.long_break_minutes}m</span>
-          </div>
           <p class="muted" id="focus-status-message">One active focus session is allowed per user.</p>
         </div>
       </article>
